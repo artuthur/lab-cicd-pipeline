@@ -1,0 +1,74 @@
+# Pipeline, version 2 : lint, tests, puis construction de l'image et envoi dans le registre.
+# Le déploiement viendra ensuite.
+
+stages:
+  - lint
+  - test
+  - build
+
+default:
+  image: python:3.12-slim
+  tags:
+    - docker
+
+lint:
+  stage: lint
+  script:
+    - pip install --quiet flake8
+    - flake8
+
+test:
+  stage: test
+  script:
+    - pip install --quiet -r requirements.txt pytest
+    - pytest -v
+
+build:
+  stage: build
+  # Ce job a besoin du client Docker : on remplace l'image par défaut.
+  image: docker:27-cli
+  variables:
+    # Le démon Docker de la VM runner est celui de Debian 12 (version 20.10), plus ancien
+    # que ce client. On force le constructeur historique, compatible avec les deux.
+    DOCKER_BUILDKIT: "0"
+  script:
+    # CI_REGISTRY, CI_REGISTRY_USER, CI_REGISTRY_PASSWORD et CI_REGISTRY_IMAGE sont
+    # fournies par GitLab : on ne stocke aucun mot de passe. Le mot de passe est un
+    # jeton temporaire, valable le temps du job.
+    - echo "$CI_REGISTRY_PASSWORD" | docker login --username "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - docker build --build-arg APP_VERSION="$CI_COMMIT_SHORT_SHA" --tag "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA" --tag "$CI_REGISTRY_IMAGE:latest" .
+    - docker push "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA"
+    - docker push "$CI_REGISTRY_IMAGE:latest"
+  rules:
+    # On ne publie une image que depuis la branche principale.
+    - if: $CI_COMMIT_BRANCH == "main"
+
+deploy:
+  stage: deploy
+  image: docker:27-cli
+  variables:
+    # Toutes les commandes docker de ce job s'exécutent sur la cible, par SSH.
+    DOCKER_HOST: "ssh://${DEPLOY_USER}@${DEPLOY_HOST}"
+  before_script:
+    # Le client SSH est nécessaire à Docker pour joindre la cible ; curl sert au test final.
+    - apk add --no-cache openssh-client curl
+    - mkdir -p ~/.ssh && chmod 700 ~/.ssh
+    # La clé privée est stockée encodée en base64 sur une seule ligne : c'est ce qui permet
+    # de la masquer dans les journaux. On la décode dans le fichier attendu par SSH.
+    - echo "$SSH_PRIVATE_KEY_B64" | base64 -d > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
+    # Empreinte de la clé de la cible, enregistrée à l'avance : protège d'un serveur usurpé.
+    - echo "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+  script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login --username "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+    - docker pull "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA"
+    # Remplacement de l'ancienne version (le "|| true" évite l'échec au tout premier déploiement).
+    - docker rm -f demo-app || true
+    - docker run -d --name demo-app --restart unless-stopped -p "${APP_PORT}:8000" "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA"
+    # Test : la version qui répond doit être celle du commit déployé.
+    - sleep 5
+    - curl -fsS "http://${DEPLOY_HOST}:${APP_PORT}/health" | tee /dev/stderr | grep -q "$CI_COMMIT_SHORT_SHA"
+  environment:
+    name: lab
+    url: "http://${DEPLOY_HOST}:${APP_PORT}"
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
