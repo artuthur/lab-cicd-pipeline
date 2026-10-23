@@ -374,6 +374,12 @@ Session la plus riche en dépannage du projet jusqu'ici — six problèmes disti
 - **Idempotence** vérifiée sur plusieurs relances consécutives après la correction finale : entièrement `ok`, aucun `changed`.
 - Connexion confirmée avec les deux comptes (`root` et `arthur`), mots de passe définitifs opérationnels via Ansible Vault.
 
+![Page de connexion de GitLab avec le compte arthur](doc/images/gitlab-sign-in.png)
+*Connexion avec le compte administrateur nominatif `arthur`, créé par le playbook. Capture prise avant le passage en HTTPS (08/10/2026), d'où la mention « Non sécurisé » dans la barre d'adresse.*
+
+![Tableau de bord de GitLab, connecté en arthur avec les droits d'administration](doc/images/gitlab-dashboard-arthur.png)
+*Une fois connecté : le bouton `Admin` en haut à droite confirme que le compte a bien les droits d'administration.*
+
 **Prochaine étape :** rôle `runner` (installation et enregistrement du GitLab Runner, exécuteur Docker) sur la VM `runner`.
 
 ---
@@ -398,6 +404,13 @@ Session la plus riche en dépannage du projet jusqu'ici — six problèmes disti
 
 **Validation finale :**
 - Runner créé et enregistré automatiquement via le playbook, visible côté GitLab (Admin Area → CI/CD → Runners) : statut `Online`, type `Instance`, tags `lab`/`docker`, exécuteur `docker`
+
+  ![Liste des runners dans l'administration de GitLab](doc/images/gitlab-runners-list.png)
+  *Admin Area → CI/CD → Runners : un runner `Online`, de type `Instance`, avec les tags `lab` et `docker`, joignable depuis `192.168.57.11`.*
+
+  ![Détail du runner](doc/images/gitlab-runner-details.png)
+  *Le détail du runner : description `lab-docker-runner`, exécuteur `docker`, version 19.4.1, et « Runs untagged jobs » (option `run_untagged`).*
+
 - **Idempotence** vérifiée en relançant le playbook : toutes les tâches en `ok`, à l'exception des deux dernières tâches du rôle (création API + enregistrement local), passées en `skipping` — comportement attendu et volontaire, pas une anomalie. Ces deux tâches sont protégées par une condition qui vérifie la présence d'un jeton déjà enregistré dans `/etc/gitlab-runner/config.toml` ; une fois le runner enregistré, la condition devient fausse et Ansible saute ces tâches plutôt que de recréer un second runner. `skipping` est donc une preuve d'idempotence au même titre que `ok`, pas un échec.
 
 **Prochaine étape :** préparation de la VM `deploy_target` (installation de Docker), puis écriture du pipeline `.gitlab-ci.yml` (build, test, package, push registre, deploy).
