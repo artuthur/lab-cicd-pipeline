@@ -1,0 +1,74 @@
+---
+# Ce rôle s'exécute sur le nœud de contrôle (localhost), pas sur les VMs.
+# Toutes les tâches sont idempotentes : rien n'est régénéré tant que les fichiers
+# existent et correspondent aux paramètres demandés.
+
+- name: Créer le répertoire de la PKI (hors dépôt Git)
+  ansible.builtin.file:
+    path: "{{ pki_dir }}"
+    state: directory
+    mode: "0700"
+
+# Autorité de certification interne
+
+- name: Générer la clé privée de la CA
+  community.crypto.openssl_privatekey:
+    path: "{{ pki_dir }}/lab-ca.key"
+    type: RSA
+    size: 4096
+    mode: "0600"
+
+- name: Générer la demande de certificat (CSR) de la CA
+  community.crypto.openssl_csr:
+    path: "{{ pki_dir }}/lab-ca.csr"
+    privatekey_path: "{{ pki_dir }}/lab-ca.key"
+    common_name: "{{ pki_ca_common_name }}"
+    basic_constraints:
+      - "CA:TRUE"
+    basic_constraints_critical: true
+    key_usage:
+      - keyCertSign
+      - cRLSign
+    key_usage_critical: true
+
+- name: Générer le certificat de la CA (auto-signé)
+  community.crypto.x509_certificate:
+    path: "{{ pki_dir }}/lab-ca.crt"
+    csr_path: "{{ pki_dir }}/lab-ca.csr"
+    privatekey_path: "{{ pki_dir }}/lab-ca.key"
+    provider: selfsigned
+    selfsigned_not_after: "{{ pki_ca_validity }}"
+    mode: "0644"
+
+# Certificat serveur (GitLab + registre), signé par la CA
+
+- name: Générer la clé privée du serveur
+  community.crypto.openssl_privatekey:
+    path: "{{ pki_dir }}/{{ pki_server_name }}.key"
+    type: RSA
+    size: 2048
+    mode: "0600"
+
+- name: Générer la CSR du serveur (SAN = adresse IP)
+  community.crypto.openssl_csr:
+    path: "{{ pki_dir }}/{{ pki_server_name }}.csr"
+    privatekey_path: "{{ pki_dir }}/{{ pki_server_name }}.key"
+    common_name: "{{ gitlab_server_ip }}"
+    subject_alt_name: "{{ pki_server_san }}"
+    basic_constraints:
+      - "CA:FALSE"
+    key_usage:
+      - digitalSignature
+      - keyEncipherment
+    extended_key_usage:
+      - serverAuth
+
+- name: Signer le certificat du serveur avec la CA interne
+  community.crypto.x509_certificate:
+    path: "{{ pki_dir }}/{{ pki_server_name }}.crt"
+    csr_path: "{{ pki_dir }}/{{ pki_server_name }}.csr"
+    provider: ownca
+    ownca_path: "{{ pki_dir }}/lab-ca.crt"
+    ownca_privatekey_path: "{{ pki_dir }}/lab-ca.key"
+    ownca_not_after: "{{ pki_server_validity }}"
+    mode: "0644"

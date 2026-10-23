@@ -1,0 +1,10 @@
+---
+common_admin_user: sysadmin
+common_admin_group: sysadmins
+
+# Chemin, sur le nœud de contrôle (WSL2), vers la clé publique SSH à déployer
+# sur le compte admin.
+#   ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_lab -C "lab-cicd-pipeline"
+common_admin_pubkey_path: "~/.ssh/id_ed25519_lab.pub"
+
+common_timezone: "Europe/Paris"

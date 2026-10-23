@@ -1,0 +1,4 @@
+---
+gitlab_external_url: "https://{{ gitlab_server_ip }}"
+gitlab_registry_external_url: "https://{{ gitlab_registry_hostport }}"
+gitlab_ssl_dir: /etc/gitlab/ssl

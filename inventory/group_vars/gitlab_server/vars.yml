@@ -1,0 +1,9 @@
+---
+gitlab_admin_username: arthur
+gitlab_admin_name: "Arthur Debacq"
+gitlab_admin_email: "admin@lab.local"
+
+# Les mots de passe réels sont dans vault.yml (chiffré) et injectés ici
+# par indirection — même pattern que database/databases sur lab-infra-as-code.
+gitlab_root_password: "{{ vault_gitlab_root_password }}"
+gitlab_admin_password: "{{ vault_gitlab_admin_password }}"

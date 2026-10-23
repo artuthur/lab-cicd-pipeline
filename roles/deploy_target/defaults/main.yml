@@ -1,0 +1,8 @@
+---
+# Compte dédié au déploiement CI/CD (distinct du compte admin "sysadmin" du rôle common)
+deploy_target_user: deployer
+
+# Chemin, sur le nœud de contrôle (WSL2), vers la clé publique SSH dédiée au déploiement.
+# Génère la paire avec :
+#   ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_ci_deploy -N "" -C "lab-cicd-pipeline-deploy"
+deploy_target_pubkey_path: "~/.ssh/id_ed25519_ci_deploy.pub"

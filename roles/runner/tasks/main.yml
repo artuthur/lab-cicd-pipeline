@@ -1,0 +1,92 @@
+---
+- name: Installer Docker Engine
+  ansible.builtin.apt:
+    name: docker.io
+    state: present
+    update_cache: true
+
+- name: Démarrer et activer Docker
+  ansible.builtin.service:
+    name: docker
+    state: started
+    enabled: true
+
+- name: Ajouter le dépôt APT GitLab Runner (format deb822)
+  ansible.builtin.deb822_repository:
+    name: gitlab_gitlab-runner
+    types: deb
+    uris: "https://packages.gitlab.com/runner/gitlab-runner/debian/"
+    suites: "{{ ansible_facts['distribution_release'] }}"
+    components: main
+    signed_by: "https://packages.gitlab.com/runner/gitlab-runner/gpgkey"
+    state: present
+
+- name: Installer le paquet gitlab-runner
+  ansible.builtin.apt:
+    name: gitlab-runner
+    state: present
+    update_cache: true
+
+- name: Créer le répertoire des certificats du GitLab Runner
+  ansible.builtin.file:
+    path: /etc/gitlab-runner/certs
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Déposer la CA interne pour les jobs (clonage du dépôt en HTTPS)
+  ansible.builtin.copy:
+    src: "{{ pki_dir }}/lab-ca.crt"
+    dest: "/etc/gitlab-runner/certs/{{ gitlab_server_ip }}.crt"
+    owner: root
+    group: root
+    mode: "0644"
+  # Nom de fichier imposé par GitLab Runner : <hôte du serveur GitLab>.crt.
+  # Les conteneurs de jobs utilisent ce fichier pour faire confiance au serveur.
+
+- name: "Ajouter l'utilisateur système gitlab-runner au groupe docker"
+  ansible.builtin.user:
+    name: gitlab-runner
+    groups: docker
+    append: true
+  notify: Redémarrer gitlab-runner
+
+- name: "Forcer l'exécution immédiate du handler (groupe docker effectif avant usage)"
+  ansible.builtin.meta: flush_handlers
+
+- name: Vérifier si un runner est déjà enregistré localement
+  ansible.builtin.command: grep -q "token = " /etc/gitlab-runner/config.toml
+  register: runner_already_registered
+  failed_when: false
+  changed_when: false
+
+- name: Créer le runner côté GitLab via l'API (obtention du jeton d'authentification)
+  ansible.builtin.uri:
+    url: "{{ gitlab_api_url }}/api/v4/user/runners"
+    method: POST
+    headers:
+      PRIVATE-TOKEN: "{{ gitlab_api_token }}"
+    body_format: json
+    body:
+      runner_type: instance_type
+      description: "{{ runner_description }}"
+      tag_list: "{{ runner_tags | join(',') }}"
+      run_untagged: true
+    status_code: 201
+  register: runner_gitlab_creation
+  when: runner_already_registered.rc != 0
+  no_log: true
+
+- name: Enregistrer gitlab-runner localement avec le jeton obtenu
+  ansible.builtin.command: >
+    gitlab-runner register
+    --non-interactive
+    --url {{ gitlab_api_url }}
+    --token {{ runner_gitlab_creation.json.token }}
+    --executor {{ runner_executor }}
+    --docker-image {{ runner_docker_image }}
+    --docker-volumes "/var/run/docker.sock:/var/run/docker.sock"
+  when: runner_already_registered.rc != 0
+  no_log: true
+  changed_when: true

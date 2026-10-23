@@ -1,0 +1,161 @@
+---
+# Ce rôle s'exécute sur le nœud de contrôle (localhost). Il pilote directement l'API REST
+# de GitLab avec le module uri : aucune bibliothèque Python supplémentaire n'est requise.
+#
+# Schéma de chaque ressource : CHERCHER (GET) -> CRÉER si absente (POST) ->
+# METTRE À JOUR si différente (PUT). C'est ce qui rend le rôle idempotent.
+#
+# ca_path : le certificat de GitLab est signé par la CA interne, que le système de WSL2
+# ne connaît pas. no_log protège le jeton, envoyé dans l'en-tête de chaque requête.
+
+# --- Projet ---
+
+- name: Chercher le projet dans GitLab
+  ansible.builtin.uri:
+    url: "{{ gitlab_project_api }}/projects/{{ gitlab_project_api_id }}"
+    headers: "{{ gitlab_project_api_headers }}"
+    ca_path: "{{ pki_dir }}/lab-ca.crt"
+    status_code: [200, 404]
+  register: gitlab_project_lookup
+  no_log: "{{ gitlab_project_no_log }}"
+
+- name: Créer le projet s'il n'existe pas
+  ansible.builtin.uri:
+    url: "{{ gitlab_project_api }}/projects"
+    method: POST
+    headers: "{{ gitlab_project_api_headers }}"
+    ca_path: "{{ pki_dir }}/lab-ca.crt"
+    body_format: json
+    body:
+      name: "{{ gitlab_project_name }}"
+      visibility: private
+      initialize_with_readme: false
+    status_code: 201
+  when: gitlab_project_lookup.status == 404
+  changed_when: true
+  no_log: "{{ gitlab_project_no_log }}"
+  # initialize_with_readme: false : dépôt vide, prêt à recevoir le premier "git push".
+
+# --- Valeurs des variables CI/CD, lues à la source ---
+
+- name: Lire la clé privée de déploiement
+  ansible.builtin.slurp:
+    src: "{{ gitlab_project_deploy_key_path }}"
+  register: gitlab_project_deploy_key
+  no_log: true
+  # slurp renvoie le contenu du fichier encodé en base64, sur une seule ligne : c'est
+  # exactement le format attendu par le pipeline (équivalent de "base64 -w0 <clé>").
+  # Il conserve aussi le retour à la ligne final de la clé, que OpenSSH exige.
+
+- name: Lire la clé d'identité (publique) de deploy_target, directement sur la machine
+  ansible.builtin.slurp:
+    src: "{{ gitlab_project_target_hostkey_path }}"
+  delegate_to: deploy_target
+  vars:
+    ansible_connection: "{{ gitlab_project_target_connection }}"
+  register: gitlab_project_target_hostkey
+  # La valeur vient de la VM elle-même (canal Ansible déjà authentifié) et non d'un
+  # "ssh-keyscan" sur le réseau : plus besoin de comparer des empreintes à la main.
+
+- name: Construire la ligne known_hosts de deploy_target
+  ansible.builtin.set_fact:
+    gitlab_project_known_hosts_value: >-
+      {{ hostvars['deploy_target'].ansible_host }}
+      {{ (gitlab_project_target_hostkey.content | b64decode).split()[0:2] | join(' ') }}
+    gitlab_project_target_hostkey_key: "{{ (gitlab_project_target_hostkey.content | b64decode).split()[1] }}"
+  # Format d'une ligne known_hosts : "<adresse> <type de clé> <clé>". On retire le
+  # commentaire (3e champ du fichier .pub) avec split()[0:2].
+
+- name: Interroger le serveur SSH de deploy_target pour contrôle croisé
+  ansible.builtin.command: "ssh-keyscan -t ed25519 -T 5 {{ hostvars['deploy_target'].ansible_host }}"
+  register: gitlab_project_keyscan
+  changed_when: false
+  when: gitlab_project_verify_host_key | bool
+
+- name: Vérifier que la clé lue sur la VM est bien celle que présente son serveur SSH
+  ansible.builtin.assert:
+    that:
+      - gitlab_project_target_hostkey_key in gitlab_project_keyscan.stdout
+    fail_msg: >-
+      La clé lue dans {{ gitlab_project_target_hostkey_path }} ne correspond pas à celle que présente
+      le serveur SSH de deploy_target. Il s'agit probablement du mauvais fichier : il faut la clé
+      d'hôte du serveur (/etc/ssh/ssh_host_ed25519_key.pub sur la VM), pas une clé d'utilisateur.
+    quiet: true
+  when: gitlab_project_verify_host_key | bool
+
+# --- Variable SSH_KNOWN_HOSTS : information publique, valeur comparable ---
+
+- name: Chercher la variable SSH_KNOWN_HOSTS
+  ansible.builtin.uri:
+    url: "{{ gitlab_project_api }}/projects/{{ gitlab_project_api_id }}/variables/SSH_KNOWN_HOSTS"
+    headers: "{{ gitlab_project_api_headers }}"
+    ca_path: "{{ pki_dir }}/lab-ca.crt"
+    status_code: [200, 404]
+  register: gitlab_project_known_hosts_var
+  no_log: "{{ gitlab_project_no_log }}"
+
+- name: Créer la variable SSH_KNOWN_HOSTS si elle n'existe pas
+  ansible.builtin.uri:
+    url: "{{ gitlab_project_api }}/projects/{{ gitlab_project_api_id }}/variables"
+    method: POST
+    headers: "{{ gitlab_project_api_headers }}"
+    ca_path: "{{ pki_dir }}/lab-ca.crt"
+    body_format: json
+    body:
+      key: SSH_KNOWN_HOSTS
+      value: "{{ gitlab_project_known_hosts_value }}"
+      masked: false
+      protected: false
+      raw: true
+    status_code: 201
+  when: gitlab_project_known_hosts_var.status == 404
+  changed_when: true
+  no_log: "{{ gitlab_project_no_log }}"
+
+- name: Mettre à jour SSH_KNOWN_HOSTS si sa valeur diffère
+  ansible.builtin.uri:
+    url: "{{ gitlab_project_api }}/projects/{{ gitlab_project_api_id }}/variables/SSH_KNOWN_HOSTS"
+    method: PUT
+    headers: "{{ gitlab_project_api_headers }}"
+    ca_path: "{{ pki_dir }}/lab-ca.crt"
+    body_format: json
+    body:
+      value: "{{ gitlab_project_known_hosts_value }}"
+    status_code: 200
+  when:
+    - gitlab_project_known_hosts_var.status == 200
+    - gitlab_project_known_hosts_var.json.value != gitlab_project_known_hosts_value
+  changed_when: true
+  no_log: "{{ gitlab_project_no_log }}"
+
+# --- Variable SSH_PRIVATE_KEY_B64 : secret, masquée et cachée ---
+
+- name: Chercher la variable SSH_PRIVATE_KEY_B64
+  ansible.builtin.uri:
+    url: "{{ gitlab_project_api }}/projects/{{ gitlab_project_api_id }}/variables/SSH_PRIVATE_KEY_B64"
+    headers: "{{ gitlab_project_api_headers }}"
+    ca_path: "{{ pki_dir }}/lab-ca.crt"
+    status_code: [200, 404]
+  register: gitlab_project_key_var
+  no_log: "{{ gitlab_project_no_log }}"
+
+- name: "Créer la variable SSH_PRIVATE_KEY_B64 si elle n'existe pas (masquée, cachée, protégée)"
+  ansible.builtin.uri:
+    url: "{{ gitlab_project_api }}/projects/{{ gitlab_project_api_id }}/variables"
+    method: POST
+    headers: "{{ gitlab_project_api_headers }}"
+    ca_path: "{{ pki_dir }}/lab-ca.crt"
+    body_format: json
+    body:
+      key: SSH_PRIVATE_KEY_B64
+      value: "{{ gitlab_project_deploy_key.content }}"
+      masked_and_hidden: true
+      protected: true
+      raw: true
+    status_code: 201
+  when: gitlab_project_key_var.status == 404
+  changed_when: true
+  no_log: true
+  # Une valeur "cachée" ne peut pas être relue depuis GitLab : on ne peut donc pas la
+  # comparer. On ne fait que la créer si elle est absente. Pour changer la clé :
+  # supprimer la variable dans GitLab, puis relancer le playbook.

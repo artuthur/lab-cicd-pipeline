@@ -1,0 +1,159 @@
+---
+- name: Installer les dépendances nécessaires à GitLab
+  ansible.builtin.apt:
+    name:
+      - curl
+      - openssh-server
+      - ca-certificates
+      - tzdata
+      - perl
+    state: present
+    update_cache: true
+
+- name: "Nettoyage : supprimer l'ancien fichier de dépôt (format .list, obsolète)"
+  ansible.builtin.file:
+    path: /etc/apt/sources.list.d/gitlab_gitlab-ce.list
+    state: absent
+
+- name: Ajouter le dépôt APT GitLab CE (format deb822)
+  ansible.builtin.deb822_repository:
+    name: gitlab_gitlab-ce
+    types: deb
+    uris: "https://packages.gitlab.com/gitlab/gitlab-ce/debian/"
+    suites: "{{ ansible_facts['distribution_release'] }}"
+    components: main
+    signed_by: "https://packages.gitlab.com/gitlab/gitlab-ce/gpgkey"
+    state: present
+
+- name: Installer le paquet gitlab-ce
+  ansible.builtin.apt:
+    name: gitlab-ce
+    state: present
+    update_cache: true
+
+- name: Créer le répertoire des certificats TLS de GitLab
+  ansible.builtin.file:
+    path: "{{ gitlab_ssl_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Déployer le certificat serveur (signé par la CA interne)
+  ansible.builtin.copy:
+    src: "{{ pki_dir }}/gitlab.crt"
+    dest: "{{ gitlab_ssl_dir }}/{{ gitlab_server_ip }}.crt"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reconfigurer GitLab
+  # Nom de fichier imposé par GitLab : <hôte de external_url>.crt (ici l'IP).
+
+- name: Déployer la clé privée du serveur
+  ansible.builtin.copy:
+    src: "{{ pki_dir }}/gitlab.key"
+    dest: "{{ gitlab_ssl_dir }}/{{ gitlab_server_ip }}.key"
+    owner: root
+    group: root
+    mode: "0600"
+  notify: Reconfigurer GitLab
+  no_log: true
+
+- name: Créer le répertoire des certificats de confiance de GitLab
+  ansible.builtin.file:
+    path: /etc/gitlab/trusted-certs
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Ajouter la CA interne aux certificats de confiance de GitLab
+  ansible.builtin.copy:
+    src: "{{ pki_dir }}/lab-ca.crt"
+    dest: /etc/gitlab/trusted-certs/lab-ca.crt
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reconfigurer GitLab
+  # GitLab embarque son propre bundle de CA : sans ça, ses composants internes
+  # refuseraient son propre certificat signé par une CA inconnue.
+
+- name: Déployer la configuration gitlab.rb
+  ansible.builtin.template:
+    src: gitlab.rb.j2
+    dest: /etc/gitlab/gitlab.rb
+    owner: root
+    group: root
+    mode: "0600"
+  notify: Reconfigurer GitLab
+
+- name: "Forcer l'exécution immédiate du handler de reconfiguration"
+  ansible.builtin.meta: flush_handlers
+  # Sans ça, le handler ne s'exécute qu'en toute fin de play — trop tard pour les
+  # tâches suivantes (gitlab-rails runner) qui dépendent d'une config déjà appliquée.
+  # Invisible en relance (handler déjà "propre"), mais bloquant sur une VM neuve.
+
+- name: Autoriser HTTP (redirection), HTTPS et registre entrants (pare-feu)
+  community.general.ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+  loop:
+    - "80"
+    - "443"
+    - "{{ gitlab_registry_port | string }}"
+
+- name: "Durcissement : désactiver l'auto-inscription des nouveaux utilisateurs"
+  ansible.builtin.command: >
+    gitlab-rails runner "ApplicationSetting.current.update!(signup_enabled: false)"
+  changed_when: false
+  # Ce réglage vit en base de données (application_settings), pas dans gitlab.rb :
+  # gitlab-rails runner est la seule voie pour l'automatiser via Ansible.
+
+- name: Créer le répertoire des scripts de bootstrap GitLab
+  ansible.builtin.file:
+    path: /opt/gitlab-bootstrap
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  # 0755 (et non 0750) : gitlab-rails runner s'exécute en tant qu'utilisateur
+  # système "git", pas root, même invoqué via Ansible avec become: true.
+  # Sans accès en traversée pour "others", le fichier est introuvable pour lui.
+
+- name: "Déployer les scripts d'initialisation (aucun secret dans ces fichiers)"
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/opt/gitlab-bootstrap/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - bootstrap_admin.rb
+    - bootstrap_token.rb
+
+- name: "Définir le mot de passe root et créer le compte admin nominatif"
+  ansible.builtin.command: gitlab-rails runner /opt/gitlab-bootstrap/bootstrap_admin.rb
+  environment:
+    GITLAB_ROOT_PASSWORD: "{{ gitlab_root_password }}"
+    GITLAB_ADMIN_USERNAME: "{{ gitlab_admin_username }}"
+    GITLAB_ADMIN_NAME: "{{ gitlab_admin_name }}"
+    GITLAB_ADMIN_EMAIL: "{{ gitlab_admin_email }}"
+    GITLAB_ADMIN_PASSWORD: "{{ gitlab_admin_password }}"
+  changed_when: false
+  no_log: true
+  # no_log masque la sortie de cette tâche (secrets en environnement) même en mode
+  # verbeux. À retirer temporairement si besoin de déboguer une erreur ici.
+
+- name: "Créer le jeton d'accès d'automatisation (valeur prédéfinie dans le Vault)"
+  ansible.builtin.command: gitlab-rails runner /opt/gitlab-bootstrap/bootstrap_token.rb
+  environment:
+    GITLAB_ADMIN_USERNAME: "{{ gitlab_admin_username }}"
+    GITLAB_API_TOKEN: "{{ gitlab_api_token }}"
+  register: gitlab_token_result
+  changed_when: "'CREATED' in gitlab_token_result.stdout"
+  no_log: true
+  # Le script affiche CREATED à la création et EXISTS ensuite : Ansible rapporte donc
+  # "changed" uniquement quand il a réellement créé le jeton. Ce jeton permet au rôle
+  # runner (play suivant) et au rôle gitlab_project de piloter l'API sans étape manuelle.
+  # no_log masque la sortie (secret en environnement) : à retirer pour déboguer.

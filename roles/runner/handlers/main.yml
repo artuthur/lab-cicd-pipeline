@@ -1,0 +1,6 @@
+---
+- name: Redémarrer gitlab-runner
+  ansible.builtin.service:
+    name: gitlab-runner
+    state: restarted
+  changed_when: true

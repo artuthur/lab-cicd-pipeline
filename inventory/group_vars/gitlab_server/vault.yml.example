@@ -1,0 +1,11 @@
+---
+# Modèle du fichier vault.yml de ce dossier. Pour l'utiliser :
+#   cp vault.yml.example vault.yml
+#   (remplacer les valeurs ci-dessous)
+#   ansible-vault encrypt vault.yml
+#
+# Mots de passe des comptes GitLab "root" (secours) et administrateur nominatif.
+# GitLab refuse les mots de passe contenant des mots courants : utiliser des valeurs
+# aléatoires, par exemple :  openssl rand -base64 20
+vault_gitlab_root_password: "REMPLACER"
+vault_gitlab_admin_password: "REMPLACER"

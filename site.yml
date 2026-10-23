@@ -1,0 +1,40 @@
+---
+- name: Autorité de certification interne (nœud de contrôle)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - pki
+
+- name: Configuration de base sur toutes les VMs du projet
+  hosts: cicd
+  become: true
+  roles:
+    - common
+    - ca_trust
+
+- name: Installation et configuration de GitLab CE
+  hosts: gitlab_server
+  become: true
+  roles:
+    - gitlab
+
+- name: Installation et enregistrement du GitLab Runner
+  hosts: ci_runners
+  become: true
+  roles:
+    - runner
+    - docker_registry_trust
+
+- name: Préparation de la cible de déploiement
+  hosts: deploy_targets
+  become: true
+  roles:
+    - deploy_target
+    - docker_registry_trust
+
+- name: Projet de démonstration et variables CI/CD (via l'API de GitLab)
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - gitlab_project

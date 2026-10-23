@@ -1,0 +1,9 @@
+---
+# Modèle du fichier vault.yml de ce dossier. Pour l'utiliser :
+#   cp vault.yml.example vault.yml
+#   (remplacer la valeur ci-dessous)
+#   ansible-vault encrypt vault.yml
+#
+# Jeton d'API d'automatisation : 20 caractères exactement (exigence de GitLab pour
+# un jeton à valeur prédéfinie). Génération :  openssl rand -hex 10
+vault_gitlab_api_token: "REMPLACER_PAR_20_CARACTERES"

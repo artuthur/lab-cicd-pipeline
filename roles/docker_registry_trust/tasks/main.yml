@@ -1,0 +1,19 @@
+---
+- name: Créer le répertoire de confiance Docker pour le registre GitLab
+  ansible.builtin.file:
+    path: "/etc/docker/certs.d/{{ gitlab_registry_hostport }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  # Le nom du dossier doit être exactement <hôte>:<port> du registre.
+
+- name: Déposer la CA interne comme certificat de confiance du registre
+  ansible.builtin.copy:
+    src: "{{ pki_dir }}/lab-ca.crt"
+    dest: "/etc/docker/certs.d/{{ gitlab_registry_hostport }}/ca.crt"
+    owner: root
+    group: root
+    mode: "0644"
+  # Pas de redémarrage de Docker nécessaire : le démon relit ce répertoire
+  # à chaque nouvelle connexion vers le registre.

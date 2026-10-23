@@ -1,0 +1,21 @@
+# Généré par Ansible (rôle gitlab) - ne pas modifier à la main sur la VM
+
+external_url '{{ gitlab_external_url }}'
+
+# HTTPS avec un certificat émis par la CA interne du lab.
+# Let's Encrypt désactivé : il exige un domaine public, absent d'un lab local
+# (sinon GitLab tente de l'activer automatiquement dès que external_url est en https).
+letsencrypt['enable'] = false
+nginx['ssl_certificate'] = "{{ gitlab_ssl_dir }}/{{ gitlab_server_ip }}.crt"
+nginx['ssl_certificate_key'] = "{{ gitlab_ssl_dir }}/{{ gitlab_server_ip }}.key"
+nginx['redirect_http_to_https'] = true
+
+# Registre de conteneurs intégré, sur un port dédié, avec le même certificat
+registry_external_url '{{ gitlab_registry_external_url }}'
+registry_nginx['ssl_certificate'] = "{{ gitlab_ssl_dir }}/{{ gitlab_server_ip }}.crt"
+registry_nginx['ssl_certificate_key'] = "{{ gitlab_ssl_dir }}/{{ gitlab_server_ip }}.key"
+
+# Allègement pour environnement de lab (4 Go RAM alloués) :
+# le stack de monitoring intégré (Prometheus + exporters) n'est pas
+# nécessaire ici et consomme des ressources non négligeables.
+prometheus_monitoring['enable'] = false

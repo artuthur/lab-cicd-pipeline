@@ -1,0 +1,27 @@
+---
+- name: Installer Docker Engine
+  ansible.builtin.apt:
+    name: docker.io
+    state: present
+    update_cache: true
+
+- name: Démarrer et activer Docker
+  ansible.builtin.service:
+    name: docker
+    state: started
+    enabled: true
+
+- name: Créer l'utilisateur dédié au déploiement CI/CD
+  ansible.builtin.user:
+    name: "{{ deploy_target_user }}"
+    groups: docker
+    append: true
+    shell: /bin/bash
+    create_home: true
+    state: present
+
+- name: Déployer la clé publique SSH dédiée au déploiement CI/CD
+  ansible.posix.authorized_key:
+    user: "{{ deploy_target_user }}"
+    key: "{{ lookup('file', deploy_target_pubkey_path) }}"
+    state: present

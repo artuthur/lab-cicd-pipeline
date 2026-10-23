@@ -1,10 +1,16 @@
-# Pipeline, version 2 : lint, tests, puis construction de l'image et envoi dans le registre.
-# Le déploiement viendra ensuite.
+# Pipeline : lint, tests, construction de l'image, puis déploiement sur deploy_target.
 
 stages:
   - lint
   - test
   - build
+  - deploy
+
+variables:
+  # Cible de déploiement (valeurs non secrètes, donc versionnées avec le pipeline).
+  DEPLOY_HOST: "192.168.57.12"
+  DEPLOY_USER: "deployer"
+  APP_PORT: "8000"
 
 default:
   image: python:3.12-slim
@@ -46,18 +52,35 @@ build:
 deploy:
   stage: deploy
   image: docker:27-cli
-  variables:
-    # Toutes les commandes docker de ce job s'exécutent sur la cible, par SSH.
-    DOCKER_HOST: "ssh://${DEPLOY_USER}@${DEPLOY_HOST}"
   before_script:
     # Le client SSH est nécessaire à Docker pour joindre la cible ; curl sert au test final.
     - apk add --no-cache openssh-client curl
+    # Échouer clairement si une variable secrète n'est pas transmise à ce job
+    # (absente, mal nommée, ou protégée alors que la branche ne l'est pas).
+    - |
+      if [ -z "$SSH_PRIVATE_KEY_B64" ]; then
+        echo "ERREUR - SSH_PRIVATE_KEY_B64 est vide dans ce job"
+        exit 1
+      fi
+      if [ -z "$SSH_KNOWN_HOSTS" ]; then
+        echo "ERREUR - SSH_KNOWN_HOSTS est vide dans ce job"
+        exit 1
+      fi
     - mkdir -p ~/.ssh && chmod 700 ~/.ssh
     # La clé privée est stockée encodée en base64 sur une seule ligne : c'est ce qui permet
     # de la masquer dans les journaux. On la décode dans le fichier attendu par SSH.
     - echo "$SSH_PRIVATE_KEY_B64" | base64 -d > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
     # Empreinte de la clé de la cible, enregistrée à l'avance : protège d'un serveur usurpé.
     - echo "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+    # Toutes les commandes docker qui suivent s'exécutent sur la cible, par SSH.
+    # La valeur est construite ici (le shell remplace les variables) plutôt que dans
+    # la section "variables", où l'imbrication de variables ne s'est pas comportée comme prévu.
+    - export DOCKER_HOST="ssh://${DEPLOY_USER}@${DEPLOY_HOST}"
+    - echo "Cible Docker = $DOCKER_HOST"
+    # Vérifier la connexion à la cible avant toute opération. Sans cette ligne, un échec de
+    # connexion ressortirait sous forme d'une erreur trompeuse lors du "docker login"
+    # (le client tenterait alors de joindre le registre lui-même).
+    - docker ps
   script:
     - echo "$CI_REGISTRY_PASSWORD" | docker login --username "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
     - docker pull "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA"

@@ -1,0 +1,33 @@
+---
+gitlab_project_name: demo-app
+
+# Le projet est créé dans l'espace de noms de l'utilisateur propriétaire du jeton d'API,
+# c'est-à-dire le compte admin nominatif (arthur).
+gitlab_project_namespace: "{{ hostvars['gitlab'].gitlab_admin_username }}"
+
+# Clé privée de déploiement, sur le nœud de contrôle (même paire que celle dont la partie
+# publique est déployée sur deploy_target par le rôle deploy_target).
+gitlab_project_deploy_key_path: "{{ lookup('ansible.builtin.env', 'HOME') }}/.ssh/id_ed25519_ci_deploy"
+
+# Clé d'identité de la VM cible, lue directement sur la machine.
+gitlab_project_target_hostkey_path: /etc/ssh/ssh_host_ed25519_key.pub
+
+# Connexion utilisée pour lire la clé d'identité sur la VM cible. Doit être "ssh" : sans cela,
+# le mot-clé "connection: local" d'un play s'applique AUSSI aux tâches déléguées, et le
+# fichier serait cherché sur le poste de contrôle au lieu de la VM.
+gitlab_project_target_connection: ssh
+
+# Compare la clé lue sur la VM avec celle que présente réellement son serveur SSH
+# (ssh-keyscan, depuis le poste de contrôle) et s'arrête si elles diffèrent.
+gitlab_project_verify_host_key: true
+
+# Protège le jeton d'API (envoyé en en-tête HTTP) dans les sorties d'Ansible.
+# Pour déboguer : ansible-playbook ... -e gitlab_project_no_log=false
+gitlab_project_no_log: true
+
+# Valeurs dérivées
+gitlab_project_api: "{{ gitlab_api_url }}/api/v4"
+# Dans l'URL de l'API, un projet s'identifie par son chemin dont le "/" est encodé en %2F.
+gitlab_project_api_id: "{{ (gitlab_project_namespace ~ '/' ~ gitlab_project_name) | replace('/', '%2F') }}"
+gitlab_project_api_headers:
+  PRIVATE-TOKEN: "{{ gitlab_api_token }}"

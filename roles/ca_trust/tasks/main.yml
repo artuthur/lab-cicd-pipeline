@@ -1,0 +1,13 @@
+---
+- name: Déposer le certificat de la CA interne dans le magasin de confiance du système
+  ansible.builtin.copy:
+    src: "{{ pki_dir }}/lab-ca.crt"
+    dest: /usr/local/share/ca-certificates/lab-ca.crt
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Mettre à jour le magasin de certificats
+  # src est lu sur le nœud de contrôle (là où le rôle pki a généré la CA).
+
+- name: "Appliquer immédiatement la mise à jour (les tâches suivantes en dépendent)"
+  ansible.builtin.meta: flush_handlers

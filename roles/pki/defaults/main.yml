@@ -1,0 +1,9 @@
+---
+pki_ca_common_name: "Lab CI/CD CA Interne"
+pki_ca_validity: "+3650d"
+
+# Certificat serveur de GitLab (et de son registre, même hôte)
+pki_server_name: gitlab
+pki_server_validity: "+825d"
+pki_server_san:
+  - "IP:{{ gitlab_server_ip }}"

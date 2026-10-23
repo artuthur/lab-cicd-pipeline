@@ -1,0 +1,7 @@
+---
+runner_description: "lab-docker-runner"
+runner_executor: "docker"
+runner_docker_image: "debian:12"
+runner_tags:
+  - lab
+  - docker

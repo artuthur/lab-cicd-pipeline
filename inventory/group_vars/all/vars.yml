@@ -1,0 +1,17 @@
+---
+# Emplacement de la PKI interne sur le nœud de contrôle (WSL2).
+# Volontairement hors du dépôt Git et hors /mnt/c : permissions Unix réelles pour
+# la clé privée de la CA (même logique que les clés SSH, cf. scripts/sync-vagrant-keys.sh).
+pki_dir: "{{ lookup('ansible.builtin.env', 'HOME') }}/.lab-pki/lab-cicd-pipeline"
+
+# Adresses de GitLab et de son registre de conteneurs (accès par IP, pas de DNS dans le lab)
+gitlab_server_ip: "{{ hostvars['gitlab'].ansible_host }}"
+gitlab_registry_port: 5050
+gitlab_registry_hostport: "{{ gitlab_server_ip }}:{{ gitlab_registry_port }}"
+
+# API de GitLab, et jeton d'accès utilisé par Ansible pour la piloter (enregistrement
+# du runner, création du projet et de ses variables CI/CD).
+# La valeur est définie à l'avance dans le Vault, puis créée dans GitLab par le rôle
+# gitlab : le secret naît dans le Vault, pas dans l'interface de GitLab.
+gitlab_api_url: "https://{{ gitlab_server_ip }}"
+gitlab_api_token: "{{ vault_gitlab_api_token }}"
